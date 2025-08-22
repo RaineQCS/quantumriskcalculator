@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Contract Leakage & Risk Quick Diagnostic</title>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+  .container { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  .sub { color: #666; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+  .card { background: #fff; border: 1px solid #e6e6e6; border-radius: 12px; padding: 16px; }
+  .shadow { box-shadow: 0 6px 18px rgba(0,0,0,0.06); }
+  label { font-size: 13px; color: #333; display: block; margin-bottom: 6px; }
+  input, select { width: 100%; padding: 10px 12px; border: 1px solid #d6d6d6; border-radius: 8px; font-size: 14px; }
+  .muted { color: #777; font-size: 12px; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  .kpi { font-size: 28px; font-weight: 700; margin-top: 6px; }
+  .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+  .risk-low   { background: #e9f7ef; color: #1e7e34; }
+  .risk-med   { background: #fff3cd; color: #a66f00; }
+  .risk-high  { background: #fdecea; color: #a33122; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #f0f0f0; }
+  tfoot td { font-weight: 700; }
+  .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .right { text-align: right; }
+  .full { grid-column: span 12; }
+  .six { grid-column: span 6; }
+  .four { grid-column: span 4; }
+  .three { grid-column: span 3; }
+  .hide { display:none; }
+  .btn { background: #0f172a; color: #fff; border: none; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Contract Leakage & Risk Diagnostic</h1>
+  <div class="sub">Enter figures, toggle contract controls, get instant leakage estimate and risk band. Mirrors your Excel logic.</div>
+
+  <div class="grid">
+    <div class="card shadow six">
+      <h3>Project & Revenue Inputs</h3>
+      <label>Average Revenue (per year)</label>
+      <input id="rev" type="number" value="5000000" min="0" step="1000"/>
+      <label style="margin-top:10px;">Projects Per Year</label>
+      <input id="projects" type="number" value="10" min="0" step="1"/>
+      <label style="margin-top:10px;">Payment Terms Average (days)</label>
+      <input id="pt" type="number" value="14" min="0" step="1"/>
+      <label style="margin-top:10px;">Late Payment Frequency (%)</label>
+      <input id="late" type="number" value="25" min="0" max="100" step="1"/>
+      <label style="margin-top:10px;">Disputes Per Project</label>
+      <input id="dpp" type="number" value="0" min="0" step="0.1"/>
+      <label style="margin-top:10px;">Probability of Winning a Dispute (%)</label>
+      <input id="pwin" type="number" value="100" min="0" max="100" step="1"/>
+      <label style="margin-top:10px;">PM Admin Hours on Contract Work per month</label>
+      <input id="pmhrs" type="number" value="20" min="0" step="1"/>
+      <label style="margin-top:10px;">Variation Rate (of revenue)</label>
+      <input id="varrate" type="number" value="5" min="0" max="100" step="0.5"/>
+      <div class="muted" style="margin-top:8px;">Note: Current leakage calc uses fixed averages from your workbook; variation rate is listed for context.</div>
+    </div>
+
+    <div class="card shadow six">
+      <h3>Commercial Risk Assessment</h3>
+      <div id="risk-qs"></div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" onclick="resetQs()">Reset toggles</button>
+        <div style="flex:1"></div>
+        <div id="risk-pill" class="pill risk-high">High risk</div>
+      </div>
+    </div>
+
+    <div class="card shadow four">
+      <h3>Leakage Summary</h3>
+      <div class="muted">Annual contractual leakage</div>
+      <div class="kpi mono" id="leak-total">$0</div>
+      <div class="muted">Breakdown below</div>
+    </div>
+
+    <div class="card shadow four">
+      <h3>Risk Score</h3>
+      <div class="muted">Count of "No" x 10</div>
+      <div class="kpi mono" id="risk-score">70</div>
+      <div class="muted">Banding: ≤30 Low, ≤60 Medium, >60 High</div>
+    </div>
+
+    <div class="card shadow four">
+      <h3>Talking Points</h3>
+      <ul>
+        <li>Tie late payments to cash drag.</li>
+        <li>Tie missing notices to delay & variation leakage.</li>
+        <li>If High risk, link to PM training + contract controls.</li>
+      </ul>
+    </div>
+
+    <div class="card shadow full">
+      <h3>Leakage Breakdown</h3>
+      <table>
+        <thead>
+          <tr><th>Category</th><th class="right">Rate</th><th class="right">Amount</th></tr>
+        </thead>
+        <tbody id="breakdown"></tbody>
+        <tfoot>
+          <tr><td>Total</td><td class="right mono" id="rate-sum">–</td><td class="right mono" id="amount-sum">$0</td></tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const qs = [
+  "Do you change the Unlimited Liability clause?",
+  "Do you negotiate your payment terms?",
+  "Do you change the Unlimited Re-Warranty or Defects Liability Period?",
+  "Do you change the Liquidated Damages Clause to be Capped?",
+  "Do you remove the Consequential Damages Clause?",
+  "Do you change the Termination Clause to make sure it's Reciprocal?",
+  "Do you negotiate the dispute resolution process into the contract?",
+  "Do your PM's & Site Staff know exactly what to do if your company haven't been paid?",
+  "Do your PM's & Site Staff have access to a legal or contracts expert?",
+  "Do you provide contract specific training for your PM's and Site Staff?"
+];
+
+function currency(n){ return n.toLocaleString(undefined, {style:'currency', currency:'USD', maximumFractionDigits:0}); }
+function pct(n){ return (n*100).toFixed(2).replace(/\.00$/,'') + "%"; }
+
+function renderQuestions(){
+  const root = document.getElementById('risk-qs');
+  root.innerHTML = '';
+  qs.forEach((q, i) => {
+    const id = 'q'+i;
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+    wrap.style.marginBottom = '8px';
+    wrap.innerHTML = `
+      <label style="flex:1">${q}</label>
+      <select id="${id}">
+        <option value="Yes">Yes</option>
+        <option value="No">No</option>
+      </select>`;
+    root.appendChild(wrap);
+  });
+  // defaults from workbook
+  const defaults = ["Yes","No","No","Yes","No","No","No","No","No","Yes"];
+  defaults.forEach((v,i)=>{ document.getElementById('q'+i).value = v; });
+}
+
+function calc(){
+  const rev = Number(document.getElementById('rev').value||0);
+
+  // Fixed rates from workbook rows B15..B20 & B18
+  const rates = [
+    {name:"Average Uncaptured Variation Cost", rate:0.03},
+    {name:"Average Uncaptured Delay Costs", rate:0.03},
+    {name:"Average Non Payment/ Dispute Cost", rate:0.01},
+    {name:"Average Cash Drag (Cashflowing for client)", rate:0.02},
+    {name:"Average Late Payment Cost", rate:0.0175},
+    {name:"Average Admin Cost (Contract Work by other)", rate:0.02}
+  ];
+
+  const tbody = document.getElementById('breakdown');
+  tbody.innerHTML = '';
+  let sumRate = 0, sumAmt = 0;
+  rates.forEach(r => {
+    const amt = rev * r.rate;
+    sumRate += r.rate;
+    sumAmt += amt;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.name}</td><td class="right mono">${pct(r.rate)}</td><td class="right mono">${currency(amt)}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('rate-sum').textContent = pct(sumRate);
+  document.getElementById('amount-sum').textContent = currency(sumAmt);
+  document.getElementById('leak-total').textContent = currency(sumAmt);
+
+  // Risk: score = COUNTIF("No") * 10; band: <=30 Low, <=60 Medium, else High
+  let nos = 0;
+  for(let i=0;i<qs.length;i++){
+    if(document.getElementById('q'+i).value === 'No') nos++;
+  }
+  const score = nos * 10;
+  document.getElementById('risk-score').textContent = String(score);
+
+  const pill = document.getElementById('risk-pill');
+  if(score <= 30){ pill.textContent = "Low risk"; pill.className = "pill risk-low"; }
+  else if(score <= 60){ pill.textContent = "Medium risk"; pill.className = "pill risk-med"; }
+  else { pill.textContent = "High risk"; pill.className = "pill risk-high"; }
+}
+
+function resetQs(){
+  renderQuestions();
+  calc();
+}
+
+renderQuestions();
+['rev','projects','pt','late','dpp','pwin','pmhrs','varrate'].forEach(id => {
+  document.getElementById(id).addEventListener('input', calc);
+});
+
+document.getElementById('risk-qs').addEventListener('change', calc);
+
+// initial calc
+calc();
+</script>
+</body>
+</html>
